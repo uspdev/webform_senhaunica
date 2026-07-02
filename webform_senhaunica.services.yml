@@ -3,6 +3,9 @@ services:
     class: Drupal\webform_senhaunica\EventSubscriber\WebformAccessSubscriber
     arguments:
       - '@current_route_match'
+      - '@messenger'
+      - '@database'
+      - '@logger.factory'
     tags:
       - { name: event_subscriber }
 

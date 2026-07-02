@@ -1,5 +1,9 @@
 <?php
-
+/**
+ * Implements hook_schema().
+ *
+ * @return array<string, array<string, mixed>>
+ */
 function webform_senhaunica_schema() {
   $schema['webform_senhaunica'] = [
     'description' => 'Tabela de usuários autenticados',
@@ -45,6 +49,8 @@ function webform_senhaunica_schema() {
 
 /**
  * Cria a tabela para instalações já existentes.
+ * 
+ * @return void
  */
 function webform_senhaunica_update_9001() {
   $schema = \Drupal::database()->schema();

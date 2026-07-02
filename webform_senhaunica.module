@@ -4,241 +4,286 @@ use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\webform\WebformInterface;
 use Drupal\webform\WebformSubmissionInterface;
+use Drupal\Core\Entity\EntityForm;
+use Drupal\Core\Access\AccessResultInterface;
+use Drupal\Core\Session\AccountInterface;
+use Drupal\Core\Url;
 
 use Uspdev\Senhaunica\Senhaunica;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 
 /**
  * Adiciona a checkbox na aba de configurações do Webform.
+ * 
+ * @param array<string, mixed> $form
+ * array<string, mixed>
+ * The form array.
  */
-function webform_senhaunica_webform_third_party_settings_form_alter(array &$form, FormStateInterface $form_state) {
+function webform_senhaunica_webform_third_party_settings_form_alter(array &$form, FormStateInterface $form_state): void {
 
-    $webform = $form_state->getFormObject()->getEntity();
 
-    $form['third_party_settings']['webform_senhaunica'] = [
-        '#type' => 'details',
-        '#title' => t('Universidade de São Paulo - Senha Única'),
-        '#open' => FALSE,
-    ];
+  /** @var EntityForm $form_object */
+  $form_object = $form_state->getFormObject();
 
-    $form['third_party_settings']['webform_senhaunica']['habilitar_senhaunica'] = [
-        '#type' => 'checkbox',
-        '#title' => t('Habilitar senha única'),
-        '#default_value' => $webform->getThirdPartySetting(
-            'webform_senhaunica',
-            'habilitar_senhaunica',
-            FALSE
-        ),
-    ];
+  $entity = $form_object->getEntity();
+
+  if (!$entity instanceof WebformInterface) {
+    return;
+  }
+
+  $webform = $entity;
+
+  if (!isset($form['third_party_settings']) || !is_array($form['third_party_settings'])) {
+    $form['third_party_settings'] = [];
+  }
+
+  $form['third_party_settings']['webform_senhaunica'] = [
+    '#type' => 'details',
+    '#title' => t('Universidade de São Paulo - Senha Única'),
+    '#open' => FALSE,
+  ];
+
+  $form['third_party_settings']['webform_senhaunica']['habilitar_senhaunica'] = [
+    '#type' => 'checkbox',
+    '#title' => t('Habilitar senha única'),
+    '#default_value' => $webform->getThirdPartySetting(
+      'webform_senhaunica',
+      'habilitar_senhaunica',
+      FALSE
+    ),
+  ];
 }
 
-function webform_senhaunica_webform_access(\Drupal\webform\WebformInterface $webform, $operation, \Drupal\Core\Session\AccountInterface $account) {
-    $habilitado = (bool) $webform->getThirdPartySetting('webform_senhaunica', 'habilitar_senhaunica', FALSE);
-    if ($habilitado) {
+function webform_senhaunica_webform_access(WebformInterface $webform, string $operation, AccountInterface $account): void {
 
-        $config = \Drupal::config('webform_senhaunica.settings');
+  $habilitado = (bool) $webform->getThirdPartySetting(
+    'webform_senhaunica',
+    'habilitar_senhaunica',
+    FALSE
+  );
 
-        $clientCredentials = [
-            'identifier' => $config->get('identifier'),
-            'secret' => $config->get('secret'),
-            'callback_id' => $config->get('callback_id'),
-        ];
+  if ($habilitado) {
+    $config = \Drupal::config('webform_senhaunica.settings');
 
-        \Drupal::logger('webform_senhaunica')->notice('<pre>@data</pre>', [
-            '@data' => print_r($clientCredentials, TRUE),
-        ]);
-}
+    $clientCredentials = [
+      'identifier' => $config->get('identifier'),
+      'secret' => $config->get('secret'),
+      'callback_id' => $config->get('callback_id'),
+    ];
+
+    \Drupal::logger('webform_senhaunica')->notice('<pre>@data</pre>', [
+      '@data' => print_r($clientCredentials, TRUE),
+    ]);
+  }
 }
 
 /**
  * Ao salvar o webform, garante que os campos existam (ou sejam removidos)
  * conforme o setting "habilitar_senhaunica".
  */
-function webform_senhaunica_entity_presave(EntityInterface $entity) {
-    if (!$entity instanceof WebformInterface) {
-        return;
+function webform_senhaunica_entity_presave(EntityInterface $entity): void {
+  if (!$entity instanceof WebformInterface) {
+    return;
+  }
+
+  $enabled = (bool) $entity->getThirdPartySetting('webform_senhaunica', 'habilitar_senhaunica', FALSE);
+
+  // Definição dos campos que queremos controlar.
+  $keys = [
+    'wsuserid' => 'WS User ID',
+    'loginUsuario' => 'Login do usuário',
+    'nomeUsuario' => 'Nome do usuário',
+  ];
+
+  if ($enabled) {
+    foreach ($keys as $key => $title) {
+      $entity->setElementProperties($key, [
+        '#type' => 'hidden',
+        '#title' => $title,
+        '#private' => TRUE,
+      ]);
     }
-
-    $enabled = (bool) $entity->getThirdPartySetting('webform_senhaunica', 'habilitar_senhaunica', FALSE);
-
-    // Definição dos campos que queremos controlar.
-    $keys = [
-        'wsuserid'     => 'WS User ID',
-        'loginUsuario' => 'Login do usuário',
-        'nomeUsuario'  => 'Nome do usuário',
-    ];
-
-    if ($enabled) {
-        foreach ($keys as $key => $title) {
-            $entity->setElementProperties($key, [
-                '#type'    => 'hidden',
-                '#title'   => $title,
-                '#private' => TRUE,
-            ]);
-        }
-    } else {
-        foreach (array_keys($keys) as $key) {
-            $entity->deleteElement($key);
-        }
+  }
+  else {
+    foreach (array_keys($keys) as $key) {
+      $entity->deleteElement($key);
     }
+  }
 }
 
 /**
  * Faz os elementos persistirem, mesmo que alguém tente apagá-los manualmente.
+ * @param EntityInterface[] $entities
  */
-function webform_senhaunica_entity_load(array $entities) {
-    foreach ($entities as $entity) {
-        if (!$entity instanceof WebformInterface) {
-            continue;
-        }
-
-        $enabled = (bool) $entity->getThirdPartySetting('webform_senhaunica', 'habilitar_senhaunica', FALSE);
-
-        if ($enabled) {
-            $keys = [
-            'wsuserid'     => 'WS User ID',
-            'loginUsuario' => 'Login do usuário',
-            'nomeUsuario'  => 'Nome do usuário',
-            ];
-
-            foreach ($keys as $key => $title) {
-                // Se o elemento não existe, recria.
-                if (!$entity->getElement($key)) {
-                    $entity->setElementProperties($key, [
-                    '#type'    => 'hidden',
-                    '#title'   => $title,
-                    '#private' => TRUE,
-                    ]);
-                }
-            }
-        }
+function webform_senhaunica_entity_load(array $entities): void {
+  foreach ($entities as $entity) {
+    if (!$entity instanceof WebformInterface) {
+      continue;
     }
+
+    $enabled = (bool) $entity->getThirdPartySetting('webform_senhaunica', 'habilitar_senhaunica', FALSE);
+
+    if ($enabled) {
+      $keys = [
+        'wsuserid' => 'WS User ID',
+        'loginUsuario' => 'Login do usuário',
+        'nomeUsuario' => 'Nome do usuário',
+      ];
+
+      foreach ($keys as $key => $title) {
+        // Se o elemento não existe, recria.
+        if (!$entity->getElement($key)) {
+          $entity->setElementProperties($key, [
+            '#type' => 'hidden',
+            '#title' => $title,
+            '#private' => TRUE,
+          ]);
+        }
+      }
+    }
+  }
 }
 
 /**
  * Altera apenas o formulário de submissão do Webform (não afeta a aba "Resultados").
+ * @param array<string, mixed> $form
  */
-function webform_senhaunica_form_alter(&$form, FormStateInterface $form_state, $form_id) {
-    if (strpos($form_id, 'webform_submission_') === 0 && isset($form['#webform_id'])) {
-        $form_object = $form_state->getFormObject();
+function webform_senhaunica_form_alter(array &$form, FormStateInterface $form_state, string $form_id): void {
+  if (strpos($form_id, 'webform_submission_') === 0 && isset($form['#webform_id'])) {
+    $form_object = $form_state->getFormObject();
 
-        if ($form_object && method_exists($form_object, 'getWebform')) {
-            $webform = $form_object->getWebform();
-            $enabled = (bool) $webform->getThirdPartySetting('webform_senhaunica', 'habilitar_senhaunica', FALSE);
+    if (method_exists($form_object, 'getWebform')) {
+      $webform = $form_object->getWebform();
+      if (!$webform instanceof WebformInterface) {
+        return;
+      }
+      $enabled = (bool) $webform->getThirdPartySetting('webform_senhaunica', 'habilitar_senhaunica', FALSE);
 
-            if ($enabled && empty($form_state->getBuildInfo()['base_form_id'])) {
-                // Em vez de bloquear, redireciona para o controller de autenticação
-                $response = new RedirectResponse(\Drupal::url('webform_senhaunica.callback'));
-                $response->send();
-                exit;
+      $build_info = $form_state->getBuildInfo();
+      $base_form_id = $build_info['base_form_id'] ?? NULL;
+
+      if ($enabled && empty($base_form_id)) {
+        $form_state->setResponse(
+          new RedirectResponse(
+            Url::fromRoute('webform_senhaunica.callback')->toString()
+          )
+        );
+        return;
+      }
+
+      // Se Senha Única está habilitado, remover mensagens automáticas do Webform
+      if ($enabled) {
+        // Remover mensagens que dizem "You have already submitted this webform"
+        $messenger = \Drupal::messenger();
+        $messages = $messenger->all();
+
+        // Limpar mensagens do tipo webform
+        if (isset($messages['status'])) {
+          foreach ($messages['status'] as $key => $message) {
+            $message_text = (string) $message;
+            if (strpos($message_text, 'already submitted') !== FALSE) {
+              unset($messages['status'][$key]);
             }
-
-            // Se Senha Única está habilitado, remover mensagens automáticas do Webform
-            if ($enabled) {
-                // Remover mensagens que dizem "You have already submitted this webform"
-                $messenger = \Drupal::messenger();
-                $messages = $messenger->all();
-                
-                // Limpar mensagens do tipo webform
-                if (isset($messages['status'])) {
-                    foreach ($messages['status'] as $key => $message) {
-                        $message_text = (string) $message;
-                        if (strpos($message_text, 'already submitted') !== FALSE) {
-                            unset($messages['status'][$key]);
-                        }
-                    }
-                }
-                
-                // Remover todas as mensagens e re-adicionar apenas as que não são do webform
-                $messenger->deleteAll();
-                foreach ($messages as $type => $type_messages) {
-                    foreach ($type_messages as $message) {
-                        $messenger->addMessage($message, $type);
-                    }
-                }
-            }
+          }
         }
+
+        // Remover todas as mensagens e re-adicionar apenas as que não são do webform
+        $messenger->deleteAll();
+        foreach ($messages as $type => $type_messages) {
+          foreach ($type_messages as $message) {
+            $messenger->addMessage($message, $type);
+          }
+        }
+      }
     }
+  }
 }
 
 /**
  * Hook invocado após a submissão bem-sucedida de um webform.
  * Insere o registro na tabela webform_senhaunica para rastrear respostas.
  */
-function webform_senhaunica_webform_submission_insert(WebformSubmissionInterface $webform_submission) {
-    $webform = $webform_submission->getWebform();
-    
-    $enabled = (bool) $webform->getThirdPartySetting('webform_senhaunica', 'habilitar_senhaunica', FALSE);
-    
-    if (!$enabled) {
-        return;
-    }
+function webform_senhaunica_webform_submission_insert(WebformSubmissionInterface $webform_submission): void {
+  $webform = $webform_submission->getWebform();
 
-    $session = \Drupal::request()->getSession();
-    $numero_usp = $session->get('senhaunica_numero_usp');
-    $webform_id = $webform->id();
+  $enabled = (bool) $webform->getThirdPartySetting('webform_senhaunica', 'habilitar_senhaunica', FALSE);
 
-    // Se não há numero_usp na sessão, não fazer nada
-    if (!$numero_usp) {
-        return;
-    }
+  if (!$enabled) {
+    return;
+  }
 
-    $connection = \Drupal::database();
+  $session = \Drupal::request()->getSession();
+  $numero_usp = $session->get('senhaunica_numero_usp');
+  if (!is_string($numero_usp) || $numero_usp === '') {
+    return;
+  }
+  $webform_id = $webform->id();
 
-    // Verificar se o numero_usp já respondeu este webform_id
-    $ja_respondeu = $connection
-        ->select('webform_senhaunica', 'ws')
-        ->fields('ws', ['id'])
-        ->condition('numero_usp', $numero_usp)
-        ->condition('webform_id', $webform_id)
-        ->range(0, 1)
-        ->execute()
-        ->fetchField();
+  // Se não há numero_usp na sessão, não fazer nada
+  if (!$numero_usp) {
+    return;
+  }
 
-    if ($ja_respondeu) {
-        // Não deveria chegar aqui, mas por segurança, vamos verificar
-        \Drupal::logger('webform_senhaunica')->warning(
-            'Tentativa de submissão duplicada: numero_usp @usp em webform @webform',
-            ['@usp' => $numero_usp, '@webform' => $webform_id]
-        );
-        return;
-    }
+  $connection = \Drupal::database();
 
-    // Inserir o registro na BD
-    $connection->insert('webform_senhaunica')
-        ->fields([
-            'numero_usp' => $numero_usp,
-            'nome_usuario' => $session->get('senhaunica_nome_usuario'),
-            'email' => $session->get('senhaunica_email'),
-            'hash' => $session->get('senhaunica_hash'),
-            'webform_id' => $webform_id,
-            'created' => date('Y-m-d H:i:s'),
-        ])
-        ->execute();
+  // Verificar se o numero_usp já respondeu este webform_id
+  $result = $connection
+    ->select('webform_senhaunica', 'ws')
+    ->fields('ws', ['id'])
+    ->condition('numero_usp', $numero_usp)
+    ->condition('webform_id', $webform_id)
+    ->range(0, 1)
+    ->execute();
 
-    \Drupal::logger('webform_senhaunica')->notice(
-        'Submissão registrada: numero_usp @usp em webform @webform',
-        ['@usp' => $numero_usp, '@webform' => $webform_id]
+  $ja_respondeu = $result ? $result->fetchField() : FALSE;
+  if ($ja_respondeu) {
+    // Não deveria chegar aqui, mas por segurança, vamos verificar
+    \Drupal::logger('webform_senhaunica')->warning(
+      'Tentativa de submissão duplicada: numero_usp @usp em webform @webform',
+      ['@usp' => $numero_usp, '@webform' => $webform_id]
     );
+    return;
+  }
 
-    // Limpar dados de autenticação, mas manter marcador de "já respondeu"
-    $session->remove('senhaunica_numero_usp');
-    $session->remove('senhaunica_nome_usuario');
-    $session->remove('senhaunica_email');
-    $session->remove('senhaunica_hash');
+  // Inserir o registro na BD
+  $connection->insert('webform_senhaunica')
+    ->fields([
+      'numero_usp' => $numero_usp,
+      'nome_usuario' => $session->get('senhaunica_nome_usuario'),
+      'email' => $session->get('senhaunica_email'),
+      'hash' => $session->get('senhaunica_hash'),
+      'webform_id' => $webform_id,
+      'created' => date('Y-m-d H:i:s'),
+    ])
+    ->execute();
 
-    // Manter marcador de que respondeu este webform
-    $respondidos = $session->get('webform_senhaunica_respondidos', []);
-    $respondidos[] = $webform_id;
-    $session->set('webform_senhaunica_respondidos', $respondidos);
-    $session->remove('senhaunica_webform_id');
+  \Drupal::logger('webform_senhaunica')->notice(
+    'Submissão registrada: numero_usp @usp em webform @webform',
+    ['@usp' => $numero_usp, '@webform' => $webform_id]
+  );
 
-    \Drupal::logger('webform_senhaunica')->notice(
-        'Marcador criado: usuário respondeu webform @webform',
-        ['@webform' => $webform_id]
-    );
+  // Limpar dados de autenticação, mas manter marcador de "já respondeu"
+  $session->remove('senhaunica_numero_usp');
+  $session->remove('senhaunica_nome_usuario');
+  $session->remove('senhaunica_email');
+  $session->remove('senhaunica_hash');
 
-    \Drupal::logger('webform_senhaunica')->notice(
-        'Dados de autenticação limpos após submissão'
-    );
+  // Manter marcador de que respondeu este webform
+  $respondidos = $session->get('webform_senhaunica_respondidos', []);
+  if (!is_array($respondidos)) {
+    $respondidos = [];
+  }
+
+  $respondidos[] = $webform_id;
+  $session->set('webform_senhaunica_respondidos', $respondidos);
+  $session->remove('senhaunica_webform_id');
+
+  \Drupal::logger('webform_senhaunica')->notice(
+    'Marcador criado: usuário respondeu webform @webform',
+    ['@webform' => $webform_id]
+  );
+
+  \Drupal::logger('webform_senhaunica')->notice(
+    'Dados de autenticação limpos após submissão'
+  );
 }
